@@ -29,8 +29,9 @@ set(DAXA_ENABLE_TOOLS OFF)
 FetchContent_Declare(
     daxa
     GIT_REPOSITORY https://github.com/Ipotrick/Daxa
-    GIT_TAG        master # tested with 984b8b833aca04530ea70371929c2e6f78a66b53, which is about 5 months after version 3.6
-    GIT_SHALLOW    TRUE
+    # Pinned: the next commit (52ba9ea, cooperative vector) needs newer Vulkan headers than SDK 1.4.304.
+    GIT_TAG        3a561af0119873a53ed6deed988c06ec0aeb1e77
+    GIT_SHALLOW    FALSE # a shallow clone can't check out a commit hash
 )
 FetchContent_MakeAvailable(daxa)
 

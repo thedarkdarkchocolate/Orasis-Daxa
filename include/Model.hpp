@@ -190,23 +190,23 @@ struct Model {
         m_images_IDs.resize(totalImages);
         m_hasTexture.resize(totalImages);
         
-        // A mesh is only a shape; the node that references it says where that shape is placed.
+        // A mesh is only a shape the node that references it says where that shape is placed
         for (cgltf_size n = 0; n < data->nodes_count; n++)
         {
 
             const cgltf_node& node = data->nodes[n];
 
-            // Nodes can also be cameras, lights or empty groups.
+            // Nodes can also be cameras, lights
             if (node.mesh == nullptr) continue;
 
             const cgltf_mesh& mesh = *node.mesh;
 
-            // Node-to-model transform: this node's own transform combined with all of its parents'. cgltf calls it
-            // "world", meaning the root of the file; for the renderer that is still the model's local space.
+            // Node-to-model transform: this node's own transform combined with all of its parents cgltf calls it
+            // "world", meaning the root of the file; for the renderer that is still the model's local space
             cgltf_float node_matrix[16];
             cgltf_node_transform_world(&node, node_matrix);
             const glm::mat4 node_to_model = glm::make_mat4(node_matrix);
-            // Normals are directions: they rotate with the node but must not be translated.
+            // Normals are directions: they rotate with the node but must not be translated
             const glm::mat3 node_to_model_rotation = glm::mat3(node_to_model);
 
             for (cgltf_size p = 0; p < mesh.primitives_count; p++)
@@ -268,11 +268,13 @@ struct Model {
                 const cgltf_accessor* color = nullptr;
                 const cgltf_accessor* norm = nullptr;
                 const cgltf_accessor* uv = nullptr;
+                const cgltf_accessor* tang = nullptr;
 
                 for (cgltf_size a = 0; a < primative.attributes_count; ++a) {
                     const cgltf_attribute& attr = primative.attributes[a];
                     if (attr.type == cgltf_attribute_type_position)                    pos = attr.data;
                     if (attr.type == cgltf_attribute_type_normal)                      norm = attr.data;
+                    if (attr.type == cgltf_attribute_type_tangent)                     tang = attr.data;
                     if (attr.type == cgltf_attribute_type_color)                       color = attr.data;
                     if (attr.type == cgltf_attribute_type_texcoord && attr.index == 0) uv  = attr.data;
                 }

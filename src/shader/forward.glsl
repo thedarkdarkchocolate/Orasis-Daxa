@@ -20,13 +20,14 @@ void main()
 
     Vertex vert = deref_i(push.vertices, gl_VertexIndex);
 
-    mat4 proj_view = deref(push.proj_view_matrices).proj_view;
+    mat4 proj = deref(push.proj_view_matrices).proj;
+    mat4 view = deref(push.proj_view_matrices).view;
     mat4 model = deref(push.model_M).model;
 
 
 
 
-    gl_Position = proj_view * model * vec4(vert.position, 1);
+    gl_Position = proj * view * model * vec4(vert.position, 1);
 
     out_pos = vec3(model * vec4(vert.position, 1.0));
     out_col = vert.color;

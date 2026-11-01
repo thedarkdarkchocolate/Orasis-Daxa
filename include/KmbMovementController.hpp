@@ -28,7 +28,7 @@ class KmbMovementController {
         };
 
         KeyMappings keys{};
-        float moveSpeed{3.f};
+        float moveSpeed{8.f};
         float lookSpeed{1.5f};
         double cursorPrev_X;
         double cursorPrev_Y;

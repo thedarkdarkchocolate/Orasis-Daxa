@@ -49,7 +49,7 @@ build\Debug\Debug\learndaxa.exe
 | `src/shader/geometry.glsl` | Deferred geometry pass: same vertex shader as forward; fragment writes position, normal, albedo to the G-buffer (no lighting). |
 | `src/shader/lighting.glsl` | Deferred lighting pass: fullscreen triangle from `gl_VertexIndex`; fragment reads the G-buffer and runs the same light loop as forward. |
 | `src/cgltf.cpp`, `src/stb_image.cpp` | The one translation unit each that compiles those single-header libraries. |
-| `assets/glb/` | `Box.glb` (red material, no textures) and `SheenChair.glb` (4 meshes, 7 images, uses `KHR_texture_transform`). |
+| `assets/glb/` | `Box.glb` (red material, no textures) and `SheenChair.glb` (4 meshes, 7 images, uses `KHR_texture_transform`). `Sponza.glb` (Khronos sample, packed from `.gltf` into one `.glb` so images are embedded; 103 primitives, 69 images, has `TANGENT`, node scale 0.008, 3 alpha-`MASK` materials; Cryengine license in `Sponza_LICENSE.md`, ~50 MB). |
 
 ## How a frame comes together
 
@@ -131,6 +131,11 @@ Progress (dated, oldest first; add a new dated entry, never rewrite an old one):
   resize). Both paths exist side by side as separate task graphs; `Deferred_Graph` is the one executed.
 
 Open (current; remove items as they are done):
+- **Reminder for 2026-10-30 (owner asked): fix the G-buffer normal first.** `geometry.glsl` now writes view-space
+  positions (`view * model`) but line 36 writes the raw object-space normal (`normalize(vert.normal)`). Change it to
+  `mat3(transpose(inverse(view * model))) * vert.normal`. Then `lighting.glsl` must work in view space too (light
+  positions through `view`, view direction `normalize(-FragPos)`), or deferred no longer matches forward. SSAO's TBN
+  needs this normal to be right. Bring this up at the start of the next session.
 - Lighting (LearnOpenGL "Basic Lighting" -> "Light casters"): light cubes are lit like everything else (they push their
   `light_color` as `mat_color`; in deferred an unlit marker would go in the G-buffer, e.g. normal `.w = 0`);
   `PointLight.intensity` is sent but unused; no attenuation yet; `lightCount` is not capped at `MAX_POINT_LIGHTS`.
@@ -142,8 +147,12 @@ Open (current; remove items as they are done):
 - `Model.hpp`, non-indexed branch: `draw_range.count = primative.indices->count` dereferences a null pointer; should be
   `pos->count`. Not hit by the current assets.
 - `Model::m_hasTexture` and `Model::m_empty_ImageID` are leftovers and can be removed.
-- No mipmaps. The normal matrix is computed per vertex in the shader (`inverse` per vertex); it could be computed once
-  per object on the CPU.
+- No mipmaps.
+- **After SSAO:** compute the normal matrix on the CPU. Add `daxa_f32mat4x4 normal` after `model` in `Model_Matrix`
+  (mat4, not mat3: buffer layout pads mat3 columns), write `transpose(inverse(m))` in `GameObject::updateTransform()`,
+  use `mat3(deref(push.model_M).normal) * vert.normal` in `forward.glsl` (world space). The deferred path needs the
+  view-space normal matrix, `transpose(inverse(view * model))`, which changes with the camera, so it can't be stored
+  once per object; compute it per frame per object, or keep it in the shader.
 
 Update this section when a step is finished: append a dated entry to Progress (the dates are the owner's record of
 progress) and update Open.
