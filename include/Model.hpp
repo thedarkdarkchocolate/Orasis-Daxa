@@ -21,7 +21,7 @@ struct Vertex_HOST
     glm::vec3 color;
     glm::vec3 normal;
     glm::vec2 uv;
-    
+    glm::vec4 tangent;    
 };
 
 
@@ -31,6 +31,7 @@ struct Model {
         uint32_t start = 0;
         uint32_t count = 0;
         int32_t slot = -1;
+        int32_t normal_slot = -1;
 
         glm::vec2 uv_scale{1.f};
         glm::vec4 mat_color{1.f};
@@ -109,8 +110,42 @@ struct Model {
         return true;
 
     }
+  
+    int32_t loadTexture(cgltf_data* data, const cgltf_texture_view& texture_view, daxa::Format format)
+    {
+        if (texture_view.texture == nullptr || texture_view.texture->image == nullptr)
+            return -1;
 
-    bool uploadImage(stbi_uc* pixels, int width, int height, int file_channels, daxa::ImageId& imageID)
+        cgltf_image* _image = texture_view.texture->image;
+        if (_image->buffer_view == nullptr)
+            return -1;
+
+        const cgltf_buffer_view* view = _image->buffer_view;
+        const stbi_uc* file_bytes = static_cast<const stbi_uc*>(view->buffer->data) + view->offset;
+
+        int32_t slot = static_cast<int32_t>(cgltf_image_index(data, _image));
+
+        if (m_images_IDs[slot].is_empty())
+        {
+            // Decode into raw pixels. Asking for 4 channels gives RGBA even if the file has 3.
+            int width = 0, height = 0, file_channels = 0, final_channels = 4;
+            stbi_uc* pixels = stbi_load_from_memory(file_bytes, static_cast<int>(view->size), &width, &height, &file_channels, final_channels);
+            
+            if (pixels == nullptr)
+                std::cout << "Decode failed: " << stbi_failure_reason() << "\n";
+            else
+            {
+                m_hasTexture[slot] = uploadImage(pixels, width, height, final_channels, m_images_IDs[slot], format);          
+                stbi_image_free(pixels);
+            }
+
+        }
+
+        return slot;
+    }
+
+
+    bool uploadImage(stbi_uc* pixels, int width, int height, int file_channels, daxa::ImageId& imageID, daxa::Format format)
     {
 
         if (width == 0 || height == 0)
@@ -120,7 +155,7 @@ struct Model {
 
 
         imageID = m_GPU.create_image({
-            .format = daxa::Format::R8G8B8A8_SRGB,
+            .format = format,
             .size = {.x = (uint32_t)width, .y = (uint32_t)height, .z = 1},
             .usage = daxa::ImageUsageFlagBits::TRANSFER_DST | daxa::ImageUsageFlagBits::SHADER_SAMPLED,
         });
@@ -219,45 +254,15 @@ struct Model {
 
                     cgltf_pbr_metallic_roughness pbr_mtlc_roughness = primative.material->pbr_metallic_roughness;
 
-                    if (pbr_mtlc_roughness.base_color_texture.texture != nullptr)
-                        if (pbr_mtlc_roughness.base_color_texture.texture->image != nullptr)
-                        {
-                            cgltf_image* _image = pbr_mtlc_roughness.base_color_texture.texture->image;
-                            cgltf_texture_view _texture = pbr_mtlc_roughness.base_color_texture;
+                    const cgltf_texture_view& base_color = pbr_mtlc_roughness.base_color_texture;
 
-                            if (_image->buffer_view != nullptr)
-                            {
-                                const cgltf_buffer_view* view = _image->buffer_view;
+                    draw_range.slot = loadTexture(data, base_color, daxa::Format::R8G8B8A8_SRGB);
+                    draw_range.normal_slot = loadTexture(data, primative.material->normal_texture, daxa::Format::R8G8B8A8_UNORM);
 
-                                // The view is a window onto the .glb's binary blob: these are the compressed file bytes.
-                                const stbi_uc* file_bytes = static_cast<const stbi_uc*>(view->buffer->data) + view->offset;
+                    if (base_color.has_transform)
+                        draw_range.uv_scale = {base_color.transform.scale[0], base_color.transform.scale[1]};                        
 
-                                // Retriving the index of the image index value ranges from 0 to data->images_count
-                                draw_range.slot = cgltf_image_index(data, _image);
-
-                                if (_texture.has_transform)
-                                    draw_range.uv_scale = {_texture.transform.scale[0], _texture.transform.scale[1]};
-                                
-
-                                if (m_images_IDs[draw_range.slot].is_empty())
-                                {
-                                    // Decode into raw pixels. Asking for 4 channels gives RGBA even if the file has 3.
-                                    int width = 0, height = 0, file_channels = 0, final_channels = 4;
-                                    stbi_uc* pixels = stbi_load_from_memory(file_bytes, static_cast<int>(view->size), &width, &height, &file_channels, final_channels);
-                                    
-                                    if (pixels == nullptr)
-                                        std::cout << "Decode failed: " << stbi_failure_reason() << "\n";
-                                    else
-                                    {
-                                        m_hasTexture[draw_range.slot] = uploadImage(pixels, width, height, final_channels, m_images_IDs[draw_range.slot]);          
-                                        stbi_image_free(pixels);
-                                    }
-
-                                }
-                            }
-                        }
-
-                        draw_range.mat_color = glm::make_vec4(pbr_mtlc_roughness.base_color_factor);
+                    draw_range.mat_color = glm::make_vec4(pbr_mtlc_roughness.base_color_factor);
                 }
                 
                 if (primative.type != cgltf_primitive_type_triangles) continue;
@@ -281,6 +286,9 @@ struct Model {
         
                 if (!pos)
                     continue;
+                if (!tang)
+                    draw_range.normal_slot = -1;
+                    
                 
                 // Pos hold all vertex positional data thus the count also 
                 const uint32_t base = (uint32_t)m_vertices.size();
@@ -301,7 +309,13 @@ struct Model {
                     }
                     if (color) cgltf_accessor_read_float(color, i, glm::value_ptr(vert.color), 3);
                     if (uv) cgltf_accessor_read_float(uv, i, glm::value_ptr(vert.uv), 2);
+                    if (tang)
+                    {
+                        cgltf_accessor_read_float(tang, i, glm::value_ptr(vert.tangent), 4);
+                        vert.tangent = glm::vec4(glm::normalize(node_to_model_rotation * glm::vec3(vert.tangent)), vert.tangent.w);
+                    }
                 }
+
 
                 if (primative.indices) {
                     for (cgltf_size i = 0; i < primative.indices->count; ++i)

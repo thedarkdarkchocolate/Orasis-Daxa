@@ -26,7 +26,7 @@
 
 daxa::ImageId createDepthAttachment(daxa::Device& GPU, daxa::Swapchain swapchain, daxa::Format format = daxa::Format::D32_SFLOAT);
 daxa::ImageId createAttachment(daxa::Device& GPU, daxa::Swapchain swapchain, daxa::Format format, std::string_view name, daxa::ImageUsageFlags flags = daxa::ImageUsageFlagBits::COLOR_ATTACHMENT | daxa::ImageUsageFlagBits::SHADER_SAMPLED);
-
+void recreateTaskImage(daxa::Device& GPU, daxa::Swapchain swapchain, daxa::ImageId& image, daxa::ExternalTaskImage& ext_image);
 
 int main(int argc, char const *argv[])
 {
@@ -83,7 +83,6 @@ int main(int argc, char const *argv[])
     };
 
     createGBuffer(GPU, swapchain);
-
 
     auto g_Buffer_views_ID = GPU.create_buffer({
         .size = sizeof(G_Buffer),
@@ -519,8 +518,10 @@ int main(int argc, char const *argv[])
                         .model_M = GPU.device_address(obj.m_world_space_buff_ID).value(),
                         .f_info = GPU.device_address(frameInfo_buff_id).value(),
                         .image_view_ID = draw.slot == -1 ? obj.m_model->m_empty_ImageID.default_view() : obj.m_model->m_images_IDs[draw.slot].default_view(),
+                        .normal_map_view_ID = draw.normal_slot == -1 ? obj.m_model->m_empty_ImageID.default_view() : obj.m_model->m_images_IDs[draw.normal_slot].default_view(),
                         .sampler_ID = repeat_sampler,
                         .hasTexture = draw.slot == -1 ? false : true,
+                        .hasNormalMap = draw.normal_slot == -1 ? false : true,
                         .uv_scale = to_daxa(draw.uv_scale),
                         // Change the 0.f vec to draw.mat_color to use the color of the material
                         .mat_color = obj.m_pointLight == nullptr ? to_daxa(draw.mat_color) : to_daxa(glm::vec4(obj.m_pointLight->light_color, 1)),
@@ -651,9 +652,8 @@ int main(int argc, char const *argv[])
         if (window.swapchain_out_of_date)
         {
             swapchain.resize();
-            GPU.destroy_image(depthAttachment);
-            depthAttachment = createDepthAttachment(GPU, swapchain);
-            task_depth_image.set_image(depthAttachment);
+
+            recreateTaskImage(GPU, swapchain, depthAttachment, task_depth_image);
 
             destroyGBuffer(GPU);
             createGBuffer(GPU, swapchain);
@@ -663,15 +663,9 @@ int main(int argc, char const *argv[])
 
             rewrite_GBuffer_views();
 
-            GPU.destroy_image(ssao_image_ID);
-            ssao_image_ID = createAttachment(GPU, swapchain, daxa::Format::R8_UNORM, "ssao image",
-                    daxa::ImageUsageFlagBits::SHADER_STORAGE | daxa::ImageUsageFlagBits::SHADER_SAMPLED);
-            ssao_image.set_image(ssao_image_ID);
+            recreateTaskImage(GPU, swapchain, ssao_image_ID, ssao_image);
             
-            GPU.destroy_image(ssao_blur_image_ID);
-            ssao_blur_image_ID = createAttachment(GPU, swapchain, daxa::Format::R8_UNORM, "ssao blur image",
-                    daxa::ImageUsageFlagBits::SHADER_STORAGE | daxa::ImageUsageFlagBits::SHADER_SAMPLED);
-            ssao_blur_image.set_image(ssao_blur_image_ID);
+            recreateTaskImage(GPU, swapchain, ssao_blur_image_ID, ssao_blur_image);
 
             window.swapchain_out_of_date = false;
         }
@@ -749,4 +743,25 @@ daxa::ImageId createAttachment(daxa::Device& GPU, daxa::Swapchain swapchain, dax
     });
 }
 
+void recreateTaskImage(daxa::Device& GPU, daxa::Swapchain swapchain, daxa::ImageId& image, daxa::ExternalTaskImage& ext_image)
+{
+    daxa::Optional<daxa::ImageInfo> imageInfo = GPU.image_info(image);
+    daxa::Extent2D extent = swapchain.get_surface_extent();
 
+    GPU.destroy_image(image);
+
+    image = GPU.create_image({
+        .flags = imageInfo.value().flags,
+        .dimensions = imageInfo.value().dimensions,
+        .format = imageInfo.value().format,
+        .size = {extent.x, extent.y, 1},
+        .mip_level_count = imageInfo.value().mip_level_count,
+        .array_layer_count = imageInfo.value().array_layer_count,
+        .sample_count = imageInfo.value().sample_count,
+        .usage = imageInfo.value().usage,
+        .memory_flags = imageInfo.value().memory_flags,
+        .name = imageInfo.value().name,
+    });
+
+    ext_image.set_image(image);
+}

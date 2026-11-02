@@ -30,7 +30,7 @@ build\Debug\Debug\learndaxa.exe
   files, wait a few seconds, close it with `CloseMainWindow()` (not a kill, or the output is lost), then read the files.
 - Daxa prints `Detected leaked images/buffers` at exit if a resource was not destroyed. An early `return -1` in `main`
   (for example after a shader error) also triggers it, because resources created before that point are not cleaned up.
-- No tests. Not a git repository.
+- No tests. It is a git repository (`main`); commit only when the owner asks.
 
 ## Layout
 
@@ -46,8 +46,9 @@ build\Debug\Debug\learndaxa.exe
 | `include/Daxa_GLM_helper.hpp` | `to_daxa(...)` conversions from glm to Daxa types (mat4, vec4, vec3, vec2). |
 | `src/shader/shared.inl` | Structs shared by C++ and GLSL (compiled by both). |
 | `src/shader/forward.glsl` | Forward path (`Forward_Graph`): vertex + fragment in one file, split by `DAXA_SHADER_STAGE`; shades in one pass. |
-| `src/shader/geometry.glsl` | Deferred geometry pass: same vertex shader as forward; fragment writes position, normal, albedo to the G-buffer (no lighting). |
-| `src/shader/lighting.glsl` | Deferred lighting pass: fullscreen triangle from `gl_VertexIndex`; fragment reads the G-buffer and runs the same light loop as forward. |
+| `src/shader/geometry.glsl` | Deferred geometry pass: vertex shader outputs view-space position, normal, tangent, bitangent; fragment applies the normal map and writes position, normal, albedo to the G-buffer (no lighting). |
+| `src/shader/ssao.glsl`, `src/shader/ssao_blur.glsl` | Compute passes: SSAO from the G-buffer position and normal, then a 4x4 box blur. Each writes an `R8_UNORM` storage image. |
+| `src/shader/lighting.glsl` | Deferred lighting pass: fullscreen triangle from `gl_VertexIndex`; fragment reads the G-buffer and the blurred SSAO and lights in view space. |
 | `src/cgltf.cpp`, `src/stb_image.cpp` | The one translation unit each that compiles those single-header libraries. |
 | `assets/glb/` | `Box.glb` (red material, no textures) and `SheenChair.glb` (4 meshes, 7 images, uses `KHR_texture_transform`). `Sponza.glb` (Khronos sample, packed from `.gltf` into one `.glb` so images are embedded; 103 primitives, 69 images, has `TANGENT`, node scale 0.008, 3 alpha-`MASK` materials; Cryengine license in `Sponza_LICENSE.md`, ~50 MB). |
 
@@ -57,22 +58,28 @@ build\Debug\Debug\learndaxa.exe
 LOAD (once per model)                                       Model.hpp
   .glb -- cgltf --> nodes --> meshes --> primitives
      per primitive:  vertices (node transform baked in), indices  --> one vertex buffer, one index buffer per model
-                     base colour image --> stb decode --> staging buffer --> copy --> image, slot = cgltf_image_index
+                     base colour (SRGB) and normal map (UNORM) --> Model::loadTexture: stb decode --> staging buffer
+                        --> copy --> image, slot = cgltf_image_index
                      uv scale, base colour factor                 --> a Draw_Indices record
 
 DRAW (every frame, Deferred_Graph by default)               main.cpp
   task "deferred Geometry"  (writes position, normals, albido + depth)              geometry.glsl
     for each object: set_index_buffer once
       for each Draw_Indices record:
-         push_constant(buffer_ptrs): buffer addresses, image view id, sampler id, hasTexture, uv_scale, mat_color
+         push_constant(buffer_ptrs): buffer addresses, image and normal map view ids, sampler id, hasTexture, hasNormalMap,
+                                     uv_scale, mat_color
          draw_indexed(first_index = start, index_count = count)
-    vertex:    Vertex read by address with gl_VertexIndex; position * model * proj_view; passes world pos, normal, uv
-    fragment:  location 0 = world position, 1 = normalize(normal), 2 = (texture(image, uv * uv_scale) or 1) * mat_color
+    vertex:    Vertex read by address with gl_VertexIndex; passes view-space pos, normal, tangent, bitangent, plus uv
+    fragment:  location 0 = view position, 1 = view normal (through the TBN if there is a normal map),
+               2 = texture(image, uv * uv_scale) * mat_color, or mat_color alone; discards alpha < 0.5
 
-  task "deferred Lighting"  (samples the 3 G-buffer images, writes swapchain)       lighting.glsl
-    push_constant(lighting_ptrs): address of the G_Buffer ids buffer, f_info, sampler id
+  task "SSAO compute"  (samples position, normals; writes ssao_image)               ssao.glsl
+  task "SSAO blur compute"  (samples ssao_image; writes ssao_blur_image)            ssao_blur.glsl
+
+  task "deferred Lighting"  (samples G-buffer and ssao_blur_image, writes swapchain) lighting.glsl
+    push_constant(lighting_ptrs): address of the G_Buffer ids buffer, f_info, proj_view_matrices, sampler id, ssao view id
     draw(vertex_count = 3): one triangle covering the screen
-    fragment:  read pos/normal/albedo at uv; albedo * (ambient + sum over lights of diffuse + specular)
+    fragment:  read pos/normal/albedo/AO at uv; lights moved to view space with attenuation and intensity; result * AO
 
 Forward_Graph (one task, forward.glsl) does the same shading in one pass straight into the swapchain.
 ```
@@ -82,7 +89,8 @@ Forward_Graph (one task, forward.glsl) does the same shading in one pass straigh
   `geometry.glsl` = index N of the pipeline's `color_attachments` = index N of `begin_renderpass`'s `color_attachments`.
 - The lighting task's `.fragment_shader.samples(...)` is what makes the graph put the barrier (and the ordering) between
   the two passes.
-- On resize: destroy, `createGBuffer`, `set_image` on each task image, then `rewrite_GBuffer_views()` (the IDs buffer).
+- On resize: `recreateTaskImage` for depth and both SSAO images (keeps every `ImageInfo` field, new size, `set_image`).
+  G-buffer: destroy, `createGBuffer`, `set_image` on each task image, then `rewrite_GBuffer_views()` (the IDs buffer).
 
 - `Model::Draw_Indices` is CPU-only: `start`, `count` (positions in the index buffer), `slot` (index into
   `m_images_IDs`, -1 for no texture), `uv_scale`, `mat_color`.
@@ -129,16 +137,26 @@ Progress (dated, oldest first; add a new dated entry, never rewrite an old one):
   + specular over all lights; normals use the inverse-transpose normal matrix in the vertex shader.
 - **2026-10-25**: Deferred shading works and gives the same picture as forward (checked by the owner, including after
   resize). Both paths exist side by side as separate task graphs; `Deferred_Graph` is the one executed.
+- **2026-11-01**: SSAO committed (`c680dd1`): compute passes for SSAO and blur, applied in `lighting.glsl`. The deferred
+  path now works in view space. Forward stays in world space with no attenuation or AO, so the two no longer give the same picture.
+- **2026-11-02**: In the working tree, not committed and not yet confirmed on screen by the owner: normal mapping
+  (`Model::loadTexture`, `Vertex.tangent`, TBN in `geometry.glsl`) and `recreateTaskImage` for resize. Its assert came from
+  copying `ImageInfo.flags` into `.usage`, which gave usage 0.
 
 Open (current; remove items as they are done):
-- **Reminder for 2026-10-30 (owner asked): fix the G-buffer normal first.** `geometry.glsl` now writes view-space
-  positions (`view * model`) but line 36 writes the raw object-space normal (`normalize(vert.normal)`). Change it to
-  `mat3(transpose(inverse(view * model))) * vert.normal`. Then `lighting.glsl` must work in view space too (light
-  positions through `view`, view direction `normalize(-FragPos)`), or deferred no longer matches forward. SSAO's TBN
-  needs this normal to be right. Bring this up at the start of the next session.
+- **Next, before parallax mapping: stop recomputing matrices per vertex in `geometry.glsl`.** The owner proposed uploading
+  `transpose(inverse(view * model))`, `view * model` and `proj * view * model`. Advice given on 2026-11-02, owner's choice
+  still to confirm: per-object per-frame uploads aren't needed. Store only the world normal matrix (add
+  `daxa_f32mat4x4 normal` after `model` in `Model_Matrix`; mat4 because buffer layout pads mat3 columns; write
+  `transpose(inverse(m))` in `GameObject::updateTransform()`). `view` is rigid, so the view-space normal is
+  `mat3(view) * (mat3(deref(push.model_M).normal) * vert.normal)`. Position: `viewPos = view * (model * pos)`, then
+  `gl_Position = proj * viewPos`. Tangent: `mat3(view) * (mat3(model) * tangent)`. `forward.glsl` can use the same normal
+  matrix without `view`.
+- **Check before parallax: bitangent sign.** `geometry.glsl:42` uses `cross(out_tang, out_norm) * w`; glTF defines
+  `cross(normal, tangent) * w`, so it looks inverted. Parallax builds on the same TBN.
 - Lighting (LearnOpenGL "Basic Lighting" -> "Light casters"): light cubes are lit like everything else (they push their
   `light_color` as `mat_color`; in deferred an unlit marker would go in the G-buffer, e.g. normal `.w = 0`);
-  `PointLight.intensity` is sent but unused; no attenuation yet; `lightCount` is not capped at `MAX_POINT_LIGHTS`.
+  `lightCount` is not capped at `MAX_POINT_LIGHTS`.
 - Deferred: the G-buffer view IDs reach `lighting.glsl` through a host-written buffer (`G_Buffer`, `g_Buffer_views_ID`,
   `rewrite_GBuffer_views`, `task_buffer`). Planned: push `ti.get(image).view_ids[0]` x3 directly in `lighting_ptrs` and
   delete the buffer, the lambda, the task buffer and the `G_Buffer` struct (removes a one-frame race on resize).
@@ -148,11 +166,7 @@ Open (current; remove items as they are done):
   `pos->count`. Not hit by the current assets.
 - `Model::m_hasTexture` and `Model::m_empty_ImageID` are leftovers and can be removed.
 - No mipmaps.
-- **After SSAO:** compute the normal matrix on the CPU. Add `daxa_f32mat4x4 normal` after `model` in `Model_Matrix`
-  (mat4, not mat3: buffer layout pads mat3 columns), write `transpose(inverse(m))` in `GameObject::updateTransform()`,
-  use `mat3(deref(push.model_M).normal) * vert.normal` in `forward.glsl` (world space). The deferred path needs the
-  view-space normal matrix, `transpose(inverse(view * model))`, which changes with the camera, so it can't be stored
-  once per object; compute it per frame per object, or keep it in the shader.
+- Later: parallax mapping, after the two items at the top of this list.
 
 Update this section when a step is finished: append a dated entry to Progress (the dates are the owner's record of
 progress) and update Open.

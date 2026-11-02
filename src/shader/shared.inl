@@ -11,6 +11,7 @@ struct Vertex
     daxa_f32vec3 color;
     daxa_f32vec3 normal;
     daxa_f32vec2 uv;
+    daxa_f32vec4 tangent;
 };
 
 struct Projection_View_Matrix {
@@ -63,8 +64,10 @@ struct buffer_ptrs
     daxa_BufferPtr(FrameInfo) f_info;
     
     daxa_ImageViewId image_view_ID;
+    daxa_ImageViewId normal_map_view_ID;
     daxa_SamplerId sampler_ID;
     daxa_b32 hasTexture;
+    daxa_b32 hasNormalMap;
     daxa_f32vec2 uv_scale;
     daxa_f32vec4 mat_color;
     
