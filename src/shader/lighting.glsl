@@ -38,9 +38,10 @@ void main()
 layout(location = 0) in vec2 FragUV;
 
 layout(location = 0) out daxa_f32vec4 outColor;
+layout(location = 1) out daxa_f32vec4 outBloomColor;
 
 
-float ambientStrenght = 0.1;
+float ambientStrenght = 0.001;
 
 void main()
 {
@@ -48,8 +49,17 @@ void main()
     FrameInfo fr = deref(push.f_info);
 
     vec3 FragPos = texture(daxa_sampler2D(deref(push.gBuffer).attachments[0], push.sampler_ID), FragUV).xyz;
-    vec3 FragNorm = texture(daxa_sampler2D(deref(push.gBuffer).attachments[1], push.sampler_ID), FragUV).xyz;
+    vec4 tmpNorm = texture(daxa_sampler2D(deref(push.gBuffer).attachments[1], push.sampler_ID), FragUV);
     vec3 FragAlbido = texture(daxa_sampler2D(deref(push.gBuffer).attachments[2], push.sampler_ID), FragUV).xyz;
+    // The w comp stores if the fragment is owned by a light if yes its value is > 0
+    if (tmpNorm.w > 0.0)
+    {
+        outColor = vec4(FragAlbido * tmpNorm.w, 1.0);
+        outBloomColor = outColor;
+        return;
+    }
+
+    vec3 FragNorm = tmpNorm.xyz;
     float AmbientOcclusion = texture(daxa_sampler2D(push.ssao_view_ID, push.sampler_ID), FragUV).r;
     
     vec3 lighting_result = vec3(0);
@@ -77,7 +87,11 @@ void main()
     lighting_result *= AmbientOcclusion;
 
     outColor = vec4(FragAlbido, 1.0) * vec4(lighting_result, 1.0);
-
+    float brightness = dot(outColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+    if(brightness > 1.0)
+        outBloomColor = vec4(outColor.rgb, 1.0);
+    else
+        outBloomColor = vec4(0.0, 0.0, 0.0, 1.0);
 }
 
 

@@ -29,7 +29,7 @@ struct PointLight {
     daxa_f32 intensity;
 };
 
-struct FrameInfo 
+struct FrameInfo
 {
     daxa_f32vec3 cameraPos;
 
@@ -70,6 +70,7 @@ struct buffer_ptrs
     daxa_b32 hasNormalMap;
     daxa_f32vec2 uv_scale;
     daxa_f32vec4 mat_color;
+    daxa_f32 emmisive;
     
 };
 
@@ -97,4 +98,21 @@ struct lighting_ptrs
     
     daxa_SamplerId sampler_ID;
     daxa_ImageViewId ssao_view_ID;
+};
+
+struct composite_ptrs
+{
+    daxa_f32 gamma;
+    daxa_f32 exposure;
+
+    daxa_SamplerId sampler_ID;
+    daxa_ImageViewId hdr_view_ID;
+    daxa_ImageViewId bloom_view_ID;
+};
+
+struct bloom_ptrs
+{
+    daxa_ImageViewId input_view_ID;
+    daxa_ImageViewId output_view_ID;
+    daxa_b32 horizontal;
 };

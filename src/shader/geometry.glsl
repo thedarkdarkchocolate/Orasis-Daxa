@@ -82,12 +82,13 @@ void main()
     {
         vec3 normal_T = texture(daxa_sampler2D(push.normal_map_view_ID, push.sampler_ID),
                  FragUV * push.uv_scale).xyz;
+
         normal_T = (normal_T - vec3(0.5)) * 2.0;
         outNormal = vec4(normalize(mat3(normalize(FragTang), normalize(FragBitang), normalize(FragNorm)) * 
-            normal_T), 1.0);
+            normal_T), push.emmisive);
     }
     else
-        outNormal = vec4(normalize(FragNorm), 1.0);
+        outNormal = vec4(normalize(FragNorm), push.emmisive);
 
 
     if (push.hasTexture)

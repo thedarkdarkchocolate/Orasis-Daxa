@@ -61,7 +61,6 @@ int main(int argc, char const *argv[])
     daxa::ImageId depthAttachment = createDepthAttachment(GPU, swapchain);
 
 
-
     // Create G-Buffer
     daxa::ImageId g_Buffer[3];
 
@@ -145,7 +144,8 @@ int main(int argc, char const *argv[])
         auto result = pipeline_manager.add_raster_pipeline2({
             .vertex_shader_info = daxa::ShaderCompileInfo2{.source = daxa::ShaderFile{"lighting.glsl"}},
             .fragment_shader_info = daxa::ShaderCompileInfo2{.source = daxa::ShaderFile{"lighting.glsl"}},
-            .color_attachments = {{.format = swapchain.get_format()}},
+            .color_attachments = {{.format = daxa::Format::R16G16B16A16_SFLOAT},
+                                  {.format = daxa::Format::R16G16B16A16_SFLOAT}},
             .raster = {},
             .name = "mi L_pipline"
         });
@@ -157,6 +157,26 @@ int main(int argc, char const *argv[])
         }
 
         lighting_pipeline = result.value();
+
+    }
+    
+    std::shared_ptr<daxa::RasterPipeline> composite_pipeline;
+    {
+        auto result = pipeline_manager.add_raster_pipeline2({
+            .vertex_shader_info = daxa::ShaderCompileInfo2{.source = daxa::ShaderFile{"composite.glsl"}},
+            .fragment_shader_info = daxa::ShaderCompileInfo2{.source = daxa::ShaderFile{"composite.glsl"}},
+            .color_attachments = {{.format = swapchain.get_format()}},
+            .raster = {},
+            .name = "mi Comp_pipline"
+        });
+        
+        if (result.is_err())
+        {
+            std::cerr << result.message() << std::endl;
+            return -1;        
+        }
+
+        composite_pipeline = result.value();
 
     }
 
@@ -221,6 +241,23 @@ int main(int argc, char const *argv[])
 
     }
 
+    std::shared_ptr<daxa::ComputePipeline> compute_pipeline_Bloom;
+    {
+        auto result = pipeline_manager.add_compute_pipeline2({
+            .source = daxa::ShaderFile{"bloom_blur.glsl"},
+            .push_constant_size = sizeof(bloom_ptrs),
+            .name = "mi Comput PIpline Blom blur",
+        });
+        
+        if (result.is_err())
+        {
+            std::cerr << result.message() << std::endl;
+            return -1;        
+        }
+
+        compute_pipeline_Bloom = result.value();
+
+    }
 
 
 
@@ -316,12 +353,26 @@ int main(int argc, char const *argv[])
                     
     daxa::ImageId ssao_blur_image_ID = createAttachment(GPU, swapchain, daxa::Format::R8_UNORM, "ssao blur image",
                     daxa::ImageUsageFlagBits::SHADER_STORAGE | daxa::ImageUsageFlagBits::SHADER_SAMPLED);
+
+    
+    // HDR & BLOOM color buffer
+    daxa::ImageId hdr_image_ID = createAttachment(GPU, swapchain, daxa::Format::R16G16B16A16_SFLOAT, "HDR image");
+    daxa::ImageId bloom_image_ID = createAttachment(GPU, swapchain, daxa::Format::R16G16B16A16_SFLOAT, "Bloom image",
+        daxa::ImageUsageFlagBits::COLOR_ATTACHMENT | daxa::ImageUsageFlagBits::SHADER_SAMPLED | daxa::ImageUsageFlagBits::SHADER_STORAGE);
+    daxa::ImageId bloom_pong_image_ID = createAttachment(GPU, swapchain, daxa::Format::R16G16B16A16_SFLOAT, "Bloom pong image",
+        daxa::ImageUsageFlagBits::COLOR_ATTACHMENT | daxa::ImageUsageFlagBits::SHADER_SAMPLED | daxa::ImageUsageFlagBits::SHADER_STORAGE);
                     
     // Scene decleration
 
     Scene scene{GPU};
     uint32_t sponza = scene.add(ASSET_DIR "/glb/Sponza.glb");
-    uint32_t lught  = scene.addLight(ASSET_DIR "/glb/Box.glb", 10.f, glm::vec3(2.f), {.translation = {0.f, 3.f, 0.f}, .scale = glm::vec3(0.2f)});
+    uint32_t lught  = scene.addLight(ASSET_DIR "/glb/Box.glb", 1.f, glm::vec3(1.f), {.translation = {0.f, 3.f, 0.f}, .scale = glm::vec3(0.2f)});
+
+    scene.addLight(ASSET_DIR "/glb/Box.glb", 3.f, glm::vec3(1.f, 0.1f, 0.1f), {.translation = {-10.f, 1.5f,  2.f}, .scale = glm::vec3(0.2f)}); // red
+    scene.addLight(ASSET_DIR "/glb/Box.glb", 3.f, glm::vec3(0.1f, 1.f, 0.1f), {.translation = { -5.f, 1.5f, -2.f}, .scale = glm::vec3(0.2f)}); // green
+    scene.addLight(ASSET_DIR "/glb/Box.glb", 3.f, glm::vec3(0.1f, 0.2f, 1.f), {.translation = {  5.f, 1.5f,  2.f}, .scale = glm::vec3(0.2f)}); // blue
+    scene.addLight(ASSET_DIR "/glb/Box.glb", 3.f, glm::vec3(1.f, 0.6f, 0.1f), {.translation = { 10.f, 1.5f, -2.f}, .scale = glm::vec3(0.2f)}); // orange
+    scene.addLight(ASSET_DIR "/glb/Box.glb", 3.f, glm::vec3(0.8f, 0.1f, 1.f), {.translation = {  0.f, 6.f,   0.f}, .scale = glm::vec3(0.2f)}); // purple, higher up
 
 
 
@@ -525,6 +576,7 @@ int main(int argc, char const *argv[])
                         .uv_scale = to_daxa(draw.uv_scale),
                         // Change the 0.f vec to draw.mat_color to use the color of the material
                         .mat_color = obj.m_pointLight == nullptr ? to_daxa(draw.mat_color) : to_daxa(glm::vec4(obj.m_pointLight->light_color, 1)),
+                        .emmisive = obj.m_pointLight != nullptr ? obj.m_pointLight->intensity : 0,
                     });
                     
                     
@@ -587,15 +639,24 @@ int main(int argc, char const *argv[])
             ti.recorder.dispatch({.x = (ssao_image_info.size.x + 7) / 8, .y = (ssao_image_info.size.y + 7) / 8, .z = 1});
         })
     );
-
-
-
-
+    
+    
+    
+    
     daxa::ExternalTaskBuffer task_buffer({.buffer = g_Buffer_views_ID, .name = "G-buffer image views"});
     Deferred_Graph.register_buffer(task_buffer);
-
+    
+    daxa::ExternalTaskImage hdr_image ({.is_swapchain_image = false, .name = "hdr_output"});
+    hdr_image.set_image(hdr_image_ID);
+    Deferred_Graph.register_image(hdr_image);
+    
+    daxa::ExternalTaskImage bloom_image ({.is_swapchain_image = false, .name = "bloom"});
+    bloom_image.set_image(bloom_image_ID);
+    Deferred_Graph.register_image(bloom_image);
+    
     Deferred_Graph.add_task(daxa::InlineTask::Raster("deferred Lighting")
-        .color_attachment.writes(task_swapchain_image)
+        .color_attachment.writes(hdr_image)
+        .color_attachment.writes(bloom_image)
         .fragment_shader.reads(task_buffer)
         .fragment_shader.samples(position_image.view())
         .fragment_shader.samples(normals_image.view())
@@ -603,26 +664,105 @@ int main(int argc, char const *argv[])
         .fragment_shader.samples(ssao_blur_image.view())
         .executes([&](daxa::TaskInterface ti)
         {
-            daxa::ImageInfo swapchain_image_info = ti.info(task_swapchain_image.view()).value();
+            daxa::ImageInfo hdr_image_info = ti.info(hdr_image.view()).value();
+            
+            daxa::RenderCommandRecorder render_recorder = std::move(ti.recorder).begin_renderpass({
+                .color_attachments = std::array{
+                    daxa::RenderAttachmentInfo{
+                        .image_view = ti.get(hdr_image).view_ids[0],
+                        .load_op = daxa::AttachmentLoadOp::CLEAR,
+                        .clear_value = std::array<f32, 4>{0.f, 0.f, 0.f, 0.f}
+                    },
+                    daxa::RenderAttachmentInfo{
+                        .image_view = ti.get(bloom_image).view_ids[0],
+                        .load_op = daxa::AttachmentLoadOp::CLEAR,
+                        .clear_value = std::array<f32, 4>{0.f, 0.f, 0.f, 0.f}
+                    }},
+                    .render_area = {.width = hdr_image_info.size.x, .height = hdr_image_info.size.y}
+                });
+                
+                render_recorder.set_pipeline(*lighting_pipeline);
+                
+                render_recorder.push_constant(lighting_ptrs{
+                    .gBuffer = GPU.device_address(g_Buffer_views_ID).value(),
+                    .f_info = GPU.device_address(frameInfo_buff_id).value(),
+                    .proj_view_matrices = GPU.device_address(proj_view_Buffer_ID).value(),
+                    .sampler_ID = repeat_sampler,
+                    .ssao_view_ID = ti.get(ssao_blur_image).view_ids[0],
+                });
+                
+                render_recorder.draw({.vertex_count = 3});
+                
+                ti.recorder = std::move(render_recorder).end_renderpass();
+                
+            })
+        );
 
+
+    daxa::ExternalTaskImage bloom_pong_image({.is_swapchain_image = false, .name = "bloom_bong"});
+    bloom_pong_image.set_image(bloom_pong_image_ID);
+    Deferred_Graph.register_image(bloom_pong_image);
+
+    int iter_amount = 5;
+    bool horizontal = true;
+    daxa::TaskImageView bloom_output = bloom_pong_image;
+    
+    for(int i = 0; i < iter_amount; i++)
+    {
+
+        auto src_view = horizontal ? bloom_image.view() : bloom_pong_image.view();
+        auto dst_view = horizontal ? bloom_pong_image.view() : bloom_image.view();
+        
+
+        Deferred_Graph.add_task(daxa::InlineTask::Compute("Bloom blur compute")
+            .compute_shader.samples(src_view)
+            .compute_shader.writes(dst_view)
+            .executes([&, src_view, dst_view, horizontal](daxa::TaskInterface ti){
+                    
+                    daxa::ImageInfo bloom_image_info = ti.info(bloom_image.view()).value();
+        
+                    ti.recorder.set_pipeline(*compute_pipeline_Bloom);
+        
+                    ti.recorder.push_constant(bloom_ptrs{
+                        .input_view_ID = ti.get(src_view).view_ids[0],
+                        .output_view_ID = ti.get(dst_view).view_ids[0],
+                        .horizontal = horizontal,
+                    });
+        
+                    ti.recorder.dispatch({.x = (bloom_image_info.size.x + 7) / 8, .y = (bloom_image_info.size.y + 7) / 8, .z = 1});
+                })
+            );   
+
+        horizontal = !horizontal; 
+        bloom_output = dst_view;
+    }
+
+    Deferred_Graph.add_task(daxa::InlineTask::Raster("composite lighting")
+        .color_attachment.writes(task_swapchain_image)
+        .fragment_shader.samples(hdr_image.view())
+        .fragment_shader.samples(bloom_output)
+        .executes([&, bloom_output](daxa::TaskInterface ti)
+        {
+            daxa::ImageInfo swapchain_info = ti.info(task_swapchain_image.view()).value();
+            
             daxa::RenderCommandRecorder render_recorder = std::move(ti.recorder).begin_renderpass({
                 .color_attachments = std::array{daxa::RenderAttachmentInfo{
                     .image_view = ti.get(task_swapchain_image).view_ids[0],
                     .load_op = daxa::AttachmentLoadOp::CLEAR,
                     .clear_value = std::array<f32, 4>{0.f, 0.f, 0.f, 0.f}
                 }},
-                .render_area = {.width = swapchain_image_info.size.x, .height = swapchain_image_info.size.y}
+                .render_area = {.width = swapchain_info.size.x, .height = swapchain_info.size.y}
             });
 
 
-            render_recorder.set_pipeline(*lighting_pipeline);
+            render_recorder.set_pipeline(*composite_pipeline);
 
-            render_recorder.push_constant(lighting_ptrs{
-                .gBuffer = GPU.device_address(g_Buffer_views_ID).value(),
-                .f_info = GPU.device_address(frameInfo_buff_id).value(),
-                .proj_view_matrices = GPU.device_address(proj_view_Buffer_ID).value(),
-                .sampler_ID = repeat_sampler,
-                .ssao_view_ID = ti.get(ssao_blur_image).view_ids[0],
+            render_recorder.push_constant(composite_ptrs{
+                .gamma = 2.2,
+                .exposure = 1.0,
+                .sampler_ID = clamp_to_edge_sampler,
+                .hdr_view_ID = ti.get(hdr_image).view_ids[0],
+                .bloom_view_ID = ti.get(bloom_output).view_ids[0]
             });
 
             render_recorder.draw({.vertex_count = 3});
@@ -636,7 +776,11 @@ int main(int argc, char const *argv[])
     Deferred_Graph.present({});
     Deferred_Graph.complete({});
 
-    auto currTime = std::chrono::high_resolution_clock::time_point();
+    auto currTime = std::chrono::high_resolution_clock::now();
+
+    // FPS counter: count frames, print the average once per second
+    float fps_timer = 0.f;
+    int fps_frames = 0;
 
     while(!window.should_close())
     {
@@ -663,8 +807,11 @@ int main(int argc, char const *argv[])
 
             rewrite_GBuffer_views();
 
-            recreateTaskImage(GPU, swapchain, ssao_image_ID, ssao_image);
+            recreateTaskImage(GPU, swapchain, hdr_image_ID, hdr_image);
+            recreateTaskImage(GPU, swapchain, bloom_image_ID, bloom_image);
+            recreateTaskImage(GPU, swapchain, bloom_pong_image_ID, bloom_pong_image);
             
+            recreateTaskImage(GPU, swapchain, ssao_image_ID, ssao_image);
             recreateTaskImage(GPU, swapchain, ssao_blur_image_ID, ssao_blur_image);
 
             window.swapchain_out_of_date = false;
@@ -674,6 +821,15 @@ int main(int argc, char const *argv[])
         auto newTime = std::chrono::high_resolution_clock::now();
         float dt = std::chrono::duration<float, std::chrono::seconds::period>(newTime - currTime).count();
         currTime = newTime;
+
+        fps_timer += dt;
+        fps_frames++;
+        if (fps_timer >= 1.f)
+        {
+            std::cout << "FPS: " << fps_frames / fps_timer << "  (" << 1000.f * fps_timer / fps_frames << " ms)" << std::endl;
+            fps_timer = 0.f;
+            fps_frames = 0;
+        }
 
         cameraController.moveInPlaneXZ(window.glfw_window_ptr, cameraObj, dt);
         camera.setViewYXZ(cameraObj.m_transform.translation, cameraObj.m_transform.rotation);
@@ -714,6 +870,9 @@ int main(int argc, char const *argv[])
     GPU.destroy_image(depthAttachment);
     GPU.destroy_image(ssao_image_ID);
     GPU.destroy_image(ssao_blur_image_ID);
+    GPU.destroy_image(hdr_image_ID);
+    GPU.destroy_image(bloom_image_ID);
+    GPU.destroy_image(bloom_pong_image_ID);
     GPU.wait_idle();
     GPU.collect_garbage();
 

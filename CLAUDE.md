@@ -49,6 +49,7 @@ build\Debug\Debug\learndaxa.exe
 | `src/shader/geometry.glsl` | Deferred geometry pass: vertex shader outputs view-space position, normal, tangent, bitangent; fragment applies the normal map and writes position, normal, albedo to the G-buffer (no lighting). |
 | `src/shader/ssao.glsl`, `src/shader/ssao_blur.glsl` | Compute passes: SSAO from the G-buffer position and normal, then a 4x4 box blur. Each writes an `R8_UNORM` storage image. |
 | `src/shader/lighting.glsl` | Deferred lighting pass: fullscreen triangle from `gl_VertexIndex`; fragment reads the G-buffer and the blurred SSAO and lights in view space. |
+| `src/shader/composite.glsl` | Final pass: fullscreen triangle; samples `hdr_image`, tone maps, applies gamma, writes the swapchain. |
 | `src/cgltf.cpp`, `src/stb_image.cpp` | The one translation unit each that compiles those single-header libraries. |
 | `assets/glb/` | `Box.glb` (red material, no textures) and `SheenChair.glb` (4 meshes, 7 images, uses `KHR_texture_transform`). `Sponza.glb` (Khronos sample, packed from `.gltf` into one `.glb` so images are embedded; 103 primitives, 69 images, has `TANGENT`, node scale 0.008, 3 alpha-`MASK` materials; Cryengine license in `Sponza_LICENSE.md`, ~50 MB). |
 
@@ -142,9 +143,23 @@ Progress (dated, oldest first; add a new dated entry, never rewrite an old one):
 - **2026-11-02**: In the working tree, not committed and not yet confirmed on screen by the owner: normal mapping
   (`Model::loadTexture`, `Vertex.tangent`, TBN in `geometry.glsl`) and `recreateTaskImage` for resize. Its assert came from
   copying `ImageInfo.flags` into `.usage`, which gave usage 0.
+- **2026-11-23**: In the working tree, not committed: HDR. Lighting writes `hdr_image` (`R16G16B16A16_SFLOAT`); a new
+  fullscreen pass `composite.glsl` samples it, applies Reinhard and gamma (pushed, 2.2) and writes the swapchain. The
+  swapchain is `R8G8B8A8_UNORM`, so gamma must be done by hand; everything before this was displayed too dark. Owner
+  verified no light + no ambient gives a black screen. Emissive light cubes: `buffer_ptrs.emmisive` (light intensity, 0
+  otherwise) is written to the normals image `.w` in `geometry.glsl`; `lighting.glsl` outputs `albedo * w` and returns
+  early when `w > 0`. Five coloured lights added in `main.cpp`. FPS counter in the console (143 FPS = vsync/FIFO cap).
 
 Open (current; remove items as they are done):
-- **Next, before parallax mapping: stop recomputing matrices per vertex in `geometry.glsl`.** The owner proposed uploading
+- **In progress: bloom.** Remaining: in `lighting.glsl` early return use `vec4(FragAlbido * w, 1.0)` (now multiplies
+  alpha) and `> 0.0`; owner to confirm cubes look evenly bright; exposure (`composite_ptrs.exposure` exists but is not
+  pushed, so it is 0: switching to `1 - exp(-hdr * exposure)` without pushing it gives black); then `bright_image` as a
+  second output of lighting (MRT, brightness > 1), compute ping-pong Gaussian blur, add in `composite.glsl` before tone
+  mapping. Gamma must stay 2.2 (owner tried 1.2 for looks; tune ambient/light/exposure instead).
+- **MAJOR FIX, must be done (owner asked not to forget it, 2026-11-23): stop recomputing matrices per vertex in
+  `geometry.glsl`.** Line 37 does `transpose(inverse(view * model))` for every vertex, every frame, with the same result
+  for all vertices of an object; lines 33/35/41 also redo `proj * view * model` / `view * model`. Do it before bloom is
+  finished or at the latest before parallax mapping. The owner proposed uploading
   `transpose(inverse(view * model))`, `view * model` and `proj * view * model`. Advice given on 2026-11-02, owner's choice
   still to confirm: per-object per-frame uploads aren't needed. Store only the world normal matrix (add
   `daxa_f32mat4x4 normal` after `model` in `Model_Matrix`; mat4 because buffer layout pads mat3 columns; write
@@ -154,9 +169,8 @@ Open (current; remove items as they are done):
   matrix without `view`.
 - **Check before parallax: bitangent sign.** `geometry.glsl:42` uses `cross(out_tang, out_norm) * w`; glTF defines
   `cross(normal, tangent) * w`, so it looks inverted. Parallax builds on the same TBN.
-- Lighting (LearnOpenGL "Basic Lighting" -> "Light casters"): light cubes are lit like everything else (they push their
-  `light_color` as `mat_color`; in deferred an unlit marker would go in the G-buffer, e.g. normal `.w = 0`);
-  `lightCount` is not capped at `MAX_POINT_LIGHTS`.
+- Lighting: `lightCount` is not capped at `MAX_POINT_LIGHTS` (6 lights now, limit 16). Forward still lights the light
+  cubes (only deferred has the emissive path).
 - Deferred: the G-buffer view IDs reach `lighting.glsl` through a host-written buffer (`G_Buffer`, `g_Buffer_views_ID`,
   `rewrite_GBuffer_views`, `task_buffer`). Planned: push `ti.get(image).view_ids[0]` x3 directly in `lighting_ptrs` and
   delete the buffer, the lambda, the task buffer and the `G_Buffer` struct (removes a one-frame race on resize).
