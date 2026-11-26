@@ -1,7 +1,7 @@
 #pragma once 
 
 #include "Model.hpp"
-
+#include "Camera.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <memory>
@@ -51,6 +51,28 @@ struct PointLightComponent
     glm::vec3 light_color;
 };
 
+struct DirectionalLightComponent
+{
+    float intensity = 1.f;
+    glm::vec3 light_dir;
+    glm::vec3 light_color;
+    glm::mat4 lightSpace{1.f};
+
+    // @param Center is the center point of the world (it can be 0, 0, 0 but its better to set as the center point of the geometry)
+    // @param radius is an estimate of distance of the geometry around the center
+    void updateLightSpace(glm::vec3 center, float world_radius)
+    {
+        Camera light_cam;
+
+        glm::vec3 light_cam_pos = center - light_dir * (world_radius + 5);
+        light_cam.setViewDirection(light_cam_pos, light_dir);
+
+        float near_plane = 1.f, far_plane = 2.f * world_radius + 10.f;
+        light_cam.setOrthographicProjection(-world_radius, world_radius, -world_radius, world_radius, near_plane, far_plane);
+
+        lightSpace = light_cam.getProjection() * light_cam.getViewMatrix();
+    }
+};
 
 struct GameObject
 {
@@ -71,6 +93,7 @@ struct GameObject
 
     // Light Compomnent
     std::unique_ptr<PointLightComponent> m_pointLight;
+    std::unique_ptr<DirectionalLightComponent> m_dirLight;
     
 
     private:
@@ -93,7 +116,8 @@ struct GameObject
     m_world_space_buff_ID {other.m_world_space_buff_ID},
     m_world_space_ptr {other.m_world_space_ptr},
     color {other.color},
-    m_pointLight {std::move(other.m_pointLight)}
+    m_pointLight {std::move(other.m_pointLight)},
+    m_dirLight {std::move(other.m_dirLight)}
     {   
         other.m_model.reset();
     } 
@@ -106,6 +130,7 @@ struct GameObject
         m_world_space_ptr = other.m_world_space_ptr;
         color = other.color;
         m_pointLight = std::move(other.m_pointLight);
+        m_dirLight = std::move(other.m_dirLight);
         other.m_model.reset();
         return *this;
     } 
@@ -113,7 +138,7 @@ struct GameObject
 
 
 
-    void createBuffer(daxa::Device GPU)
+    void createModelMatrixBuffer(daxa::Device GPU)
     {
         m_world_space_buff_ID = GPU.create_buffer({
             .size = sizeof(Model_Matrix),
@@ -141,6 +166,26 @@ struct GameObject
         return gameObj;
             
     }
+    
+    static GameObject createDirectionalLight(float intensity = 10.f, glm::vec3 light_dir = glm::vec3(-0.3f, -1.0f, -0.4f), glm::vec3 color = glm::vec3(1.f))
+    {
+
+        GameObject gameObj = GameObject::createGameObject();
+        gameObj.m_dirLight = std::make_unique<DirectionalLightComponent>();
+        gameObj.m_dirLight->intensity = intensity;
+        gameObj.m_dirLight->light_dir = glm::normalize(light_dir);;
+        gameObj.m_dirLight->light_color = color;
+
+        return gameObj;
+            
+    }
+
+    static GameObject createSkybox()
+    {
+        GameObject gameObj = GameObject::createGameObject();
+
+        return gameObj;
+    } 
 
     void setPosition(glm::vec3 pos)
     {

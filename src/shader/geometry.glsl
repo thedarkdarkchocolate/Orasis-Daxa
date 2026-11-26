@@ -9,7 +9,7 @@ DAXA_DECL_PUSH_CONSTANT(buffer_ptrs, push)
 #if DAXA_SHADER_STAGE == DAXA_SHADER_STAGE_VERTEX
 
 
-layout(location = 0) out daxa_f32vec3 out_pos;
+layout(location = 0) out daxa_f32vec4 out_pos;
 layout(location = 1) out daxa_f32vec3 out_norm;
 layout(location = 2) out daxa_f32vec3 out_col;
 layout(location = 3) out daxa_f32vec2 out_uv;
@@ -32,7 +32,7 @@ void main()
 
     gl_Position = proj * view * model * vec4(vert.position, 1);
 
-    out_pos = vec3(view * model * vec4(vert.position, 1.0));
+    out_pos = view * model * vec4(vert.position, 1.0);
     out_col = vert.color;
     out_norm = mat3(transpose(inverse(view * model))) * vert.normal;
     // out_norm = normalize(vert.normal);
@@ -40,7 +40,6 @@ void main()
 
     out_tang = mat3(view * model) * vert.tangent.xyz;
     out_bitang = cross(out_tang, out_norm) * vert.tangent.w;
-
 
 }
 
@@ -60,7 +59,7 @@ void main()
 
 
 
-layout(location = 0) in daxa_f32vec3 FragPos;
+layout(location = 0) in daxa_f32vec4 FragPos;
 layout(location = 1) in daxa_f32vec3 FragNorm;
 layout(location = 2) in daxa_f32vec3 FragColor;
 layout(location = 3) in daxa_f32vec2 FragUV;
@@ -77,7 +76,7 @@ layout(location = 2) out daxa_f32vec4 outColor;
 void main()
 {
 
-    outPos = vec4(FragPos, 1.0);
+    outPos = FragPos;
     if(push.hasNormalMap)
     {
         vec3 normal_T = texture(daxa_sampler2D(push.normal_map_view_ID, push.sampler_ID),

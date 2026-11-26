@@ -20,7 +20,7 @@ building it to learn graphics programming, following LearnOpenGL's topics but in
 ```
 cmake --preset Debug
 cmake --build build/Debug --config Debug
-build\Debug\Debug\learndaxa.exe
+build\Debug\Debug\Orasis_daxa.exe
 ```
 
 - Dependencies (GLFW, Daxa `master`, glm, cgltf, stb_image) are fetched by `cmake/deps.cmake` into `build/Debug/_deps/`.
@@ -41,7 +41,7 @@ build\Debug\Debug\learndaxa.exe
 | `include/GameObjet.hpp` | `TransformComponent` (translation, scale, YXZ rotation) and `GameObject` (model pointer, transform, its own model-matrix buffer). Note the file name is misspelled; `include/prevHeaders/GameObject.hpp` is an old, unused version. |
 | `include/Scene.hpp` | `Scene`: owns models (cached by path) and game objects (by id). `add(path, transform)` returns the id. |
 | `include/Camera.hpp` | View and projection matrices. |
-| `include/KmbMovementController.hpp` | WASD + mouse look. Tab toggles mouse capture, Esc quits, Shift speeds up. |
+| `include/KmbMovementController.hpp` | WASD + mouse look. The grave-accent key (left of 1) toggles mouse capture, Esc quits, Shift speeds up. |
 | `include/App.hpp` | `AppWindow`: GLFW window, resize/minimise flags, native handle for Daxa. |
 | `include/Daxa_GLM_helper.hpp` | `to_daxa(...)` conversions from glm to Daxa types (mat4, vec4, vec3, vec2). |
 | `src/shader/shared.inl` | Structs shared by C++ and GLSL (compiled by both). |
@@ -149,13 +149,55 @@ Progress (dated, oldest first; add a new dated entry, never rewrite an old one):
   verified no light + no ambient gives a black screen. Emissive light cubes: `buffer_ptrs.emmisive` (light intensity, 0
   otherwise) is written to the normals image `.w` in `geometry.glsl`; `lighting.glsl` outputs `albedo * w` and returns
   early when `w > 0`. Five coloured lights added in `main.cpp`. FPS counter in the console (143 FPS = vsync/FIFO cap).
+- **2026-11-24**: In the working tree, not committed: directional light + first shadow map, seen on screen by the owner.
+  `DirectionalLightComponent` (dir, colour, intensity, `lightSpace`, `updateLightSpace(center, radius)` with a local
+  `Camera`); `Scene` keeps `m_point_light_Objects_IDs` / `m_directional_light_Objects_IDs`, `add_point_Light` /
+  `add_directional_Light`, `m_shadowCenter` / `m_shadowRadius`. `FrameInfo` has `plights`/`dlights` with capped counts;
+  `DirectionalLight` carries `lightSpace` (world → light, shadow pass) and `viewToLightSpace` (view → light, lighting
+  pass). Shadow pass: task "Shadow Depth", `shadow_depth.glsl`, 1024² `D32_SFLOAT`. `lighting.glsl` has a directional loop
+  with `ShadowCalculation`, no bias yet (acne visible). `lighting.glsl` reads `FrameInfo` through
+  `#define fr (deref(push.f_info))` instead of copying it (8.0 → 5.5 ms). The earlier "143 FPS = vsync cap" was the
+  frame cost, not vsync.
+- **2026-11-25**: Owner reports bloom finished and shadow bias added (not committed). Bloom: lighting writes a second
+  output `bloom_image` (MRT, luminance > 1, emissive cubes go in whole); `bloom_blur.glsl` compute, 9-tap separable
+  Gaussian, ping-pong between `bloom_image` and `bloom_pong_image` (`iter_amount` passes, `bloom_output` = last
+  destination); `composite.glsl` adds bloom before tone mapping, which is now exposure (`1 - exp(-hdr * exposure)`,
+  exposure pushed as 1.0). Shadow: slope-scaled bias `max(0.05 * (1 - dot(n, l)), 0.005)` in `lighting.glsl`. Present
+  mode is now `FIFO_RELAXED`.
+- **2026-11-25**: Dear ImGui added (not committed), clean exit verified. `DAXA_ENABLE_UTILS_IMGUI ON` in `deps.cmake`
+  (Daxa fetches ImGui and its GLFW backend). Setup after the swapchain: `ImGui::CreateContext` (pointer kept), then
+  `ImGui_ImplGlfw_InitForVulkan(window, true)`, then `daxa::ImGuiRenderer` (swapchain format; it owns its pipeline and
+  picks a gamma shader for UNORM targets). Each frame: backend `NewFrame`, `ImGui::NewFrame`, a "UI" window with an
+  `exposure` slider (captured by the composite task), `ImGui::Render`. Task "ImGui interface" after composite calls
+  `record_commands` (it begins its own render pass with `LOAD`). Exit, reverse order before the final
+  `collect_garbage`: `ImGui_render = {}`, `ImGui_ImplGlfw_Shutdown`, `DestroyContext`. Mouse-capture toggle moved from
+  Tab to the grave-accent key (`GLFW_KEY_GRAVE_ACCENT`). Project renamed: the exe is now `Orasis_daxa.exe`.
+- **2026-11-26**: Skybox cubemap shows on screen (owner, not committed). `Scene::add_skybox(paths)` loads 6 JPGs
+  (`assets/skybox/LearnOpenGL/`, order right, left, top, bottom, front, back) with stb forced to 4 channels into one
+  `R8G8B8A8_SRGB` image with `COMPATIBLE_CUBE` and 6 layers, one staging buffer + submit per face; `m_skybox_ID` is
+  destroyed in `Scene`'s cleanup. The view goes to the shader as `cubemap_view_ID` (`main.cpp`).
 
 Open (current; remove items as they are done):
-- **In progress: bloom.** Remaining: in `lighting.glsl` early return use `vec4(FragAlbido * w, 1.0)` (now multiplies
-  alpha) and `> 0.0`; owner to confirm cubes look evenly bright; exposure (`composite_ptrs.exposure` exists but is not
-  pushed, so it is 0: switching to `1 - exp(-hdr * exposure)` without pushing it gives black); then `bright_image` as a
-  second output of lighting (MRT, brightness > 1), compute ping-pong Gaussian blur, add in `composite.glsl` before tone
-  mapping. Gamma must stay 2.2 (owner tried 1.2 for looks; tune ambient/light/exposure instead).
+- `Scene::add_skybox` upload bugs that happen to work on this driver (usage is now `TRANSFER_DST`, fixed): the
+  `TO_GENERAL` barrier (`ImageBarrierInfo` has no slice, so it covers all 6 layers, from `UNDEFINED`, with
+  `src_access = NONE`) runs once per face, in a separate submit, so it may discard or race faces already uploaded. On a
+  second call, `destroy_image` leaves the stale ID in `m_skybox_ID`, `is_empty()` stays false, nothing is recreated,
+  Daxa aborts on the destroyed ID, and the old view is never destroyed. `stbi_set_flip_vertically_on_load(true)`:
+  cubemap faces are not flipped (LearnOpenGL doesn't flip them), and the flag is global stb state.
+- Skybox direction in `lighting.glsl:68`: `vec3(FragUV, 1.0) - (view * (0,0,-1,0)).xyz` is not the ray through the
+  pixel (UV is 0..1, not NDC; the result is in view space, but the cube is in world space). Expected: the sky stretches
+  or slides when looking around. The usual approach: NDC → inverse projection → view-space ray →
+  `transpose(mat3(view))` → world. `GameObject::createSkybox()` is an empty leftover.
+- **FIX: remove the `GPU.wait_idle()` at the top of the main loop (`main.cpp`, before `update_FrameInfo`).** It is a test
+  that proved a CPU/GPU race: `FrameInfo` and the camera-matrix buffer exist once, and the CPU overwrites them for the
+  next frame while the GPU still renders the previous one, so shadows break up when the camera moves fast. The wait hides
+  it at the cost of all CPU/GPU overlap. Real fix: give each frame in flight its own copy of that data (rotating buffers,
+  or Daxa's per-task `ti.allocator`). Owner designs it; Claude reviews only.
+- Bloom review (2026-11-25), raised as questions to the owner: `iter_amount = 5` is odd, so passes are H,V,H,V,H
+  (3 horizontal, 2 vertical: blur wider horizontally); `composite.glsl` hardcodes `const float gamma = 2.2` and ignores
+  `push.gamma`; `bloom_blur.glsl` has no early return for invocations past the image edge (dispatch rounds up to 8).
+  Later: blurring at full resolution gives a small radius; a downsampled mip chain is the usual next step.
+  Gamma must stay 2.2 (owner tried 1.2 for looks; tune ambient/light/exposure instead).
 - **MAJOR FIX, must be done (owner asked not to forget it, 2026-11-23): stop recomputing matrices per vertex in
   `geometry.glsl`.** Line 37 does `transpose(inverse(view * model))` for every vertex, every frame, with the same result
   for all vertices of an object; lines 33/35/41 also redo `proj * view * model` / `view * model`. Do it before bloom is
@@ -167,10 +209,16 @@ Open (current; remove items as they are done):
   `mat3(view) * (mat3(deref(push.model_M).normal) * vert.normal)`. Position: `viewPos = view * (model * pos)`, then
   `gl_Position = proj * viewPos`. Tangent: `mat3(view) * (mat3(model) * tangent)`. `forward.glsl` can use the same normal
   matrix without `view`.
+- Perf: `forward.glsl:70` still copies the whole `FrameInfo` (`FrameInfo fr = deref(push.f_info);`); `lighting.glsl`
+  is fixed. Not urgent while `Forward_Graph` is not executed.
+- Shadows, still open: bias values were copied from LearnOpenGL (far plane 7.5) but here the ortho depth spans
+  `far - near` = 49 world units linearly, so 0.05 ≈ 2.45 units and 0.005 ≈ 0.25 units (risk of peter-panning; owner to
+  check where shadows meet the floor). Nothing outside the shadow map treated as lit (`clamp_to_edge` stretches edge
+  texels; z > 1 not handled), point-light cubes cast shadows,
+  hard edges (PCF), only `dlights[0]` has a shadow map. `update_FrameInfo` takes `Camera` by value (should be `const&`).
 - **Check before parallax: bitangent sign.** `geometry.glsl:42` uses `cross(out_tang, out_norm) * w`; glTF defines
   `cross(normal, tangent) * w`, so it looks inverted. Parallax builds on the same TBN.
-- Lighting: `lightCount` is not capped at `MAX_POINT_LIGHTS` (6 lights now, limit 16). Forward still lights the light
-  cubes (only deferred has the emissive path).
+- Forward still lights the light cubes (only deferred has the emissive path).
 - Deferred: the G-buffer view IDs reach `lighting.glsl` through a host-written buffer (`G_Buffer`, `g_Buffer_views_ID`,
   `rewrite_GBuffer_views`, `task_buffer`). Planned: push `ti.get(image).view_ids[0]` x3 directly in `lighting_ptrs` and
   delete the buffer, the lambda, the task buffer and the `G_Buffer` struct (removes a one-frame race on resize).

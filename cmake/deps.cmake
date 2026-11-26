@@ -24,6 +24,7 @@ endif()
 # Daxa - the DAXA_ENABLE_UTILS_* options must be set before Daxa's CMakeLists.txt runs.
 set(DAXA_ENABLE_UTILS_PIPELINE_MANAGER_GLSLANG ON)
 set(DAXA_ENABLE_UTILS_TASK_GRAPH ON)
+set(DAXA_ENABLE_UTILS_IMGUI ON)
 set(DAXA_ENABLE_TESTS OFF)
 set(DAXA_ENABLE_TOOLS OFF)
 FetchContent_Declare(

@@ -24,6 +24,7 @@ class KmbMovementController {
             int esc = GLFW_KEY_ESCAPE;
             int shift = GLFW_KEY_LEFT_SHIFT;
             int tab = GLFW_KEY_TAB;
+            int left_of_1 = GLFW_KEY_GRAVE_ACCENT;
 
         };
 
@@ -35,7 +36,7 @@ class KmbMovementController {
         double sensitivity{0.001f};
         bool firstMouse{true};
         bool mouseCaptured{true};   // main.cpp captures the mouse at startup
-        bool tabWasDown{false};     // Tab state on the previous frame, to detect the moment it is pressed
+        bool graveAccWasDown{false};     // ~ state on the previous frame, to detect the moment it is pressed
 
         AppWindow& m_app;
 
@@ -50,8 +51,8 @@ class KmbMovementController {
             float mvspeed = moveSpeed;
 
             // Toggle on the frame Tab goes down, not on every frame it is held.
-            const bool tabIsDown = glfwGetKey(window, keys.tab) == GLFW_PRESS;
-            if (tabIsDown && !tabWasDown)
+            const bool graveAccentIsDown = glfwGetKey(window, keys.left_of_1) == GLFW_PRESS;
+            if (graveAccentIsDown && !graveAccWasDown)
             {
                 mouseCaptured = !mouseCaptured;
                 m_app.set_mouse_capture(mouseCaptured);
@@ -59,7 +60,7 @@ class KmbMovementController {
                 // set_mouse_capture recentres the cursor; restart the delta so the camera does not jump.
                 firstMouse = true;
             }
-            tabWasDown = tabIsDown;
+            graveAccWasDown = graveAccentIsDown;
 
             if (glfwGetKey(window, keys.esc) == GLFW_PRESS) 
                 glfwSetWindowShouldClose(window, GL_TRUE);

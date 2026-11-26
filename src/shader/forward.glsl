@@ -72,15 +72,15 @@ void main()
     vec3 lighting_result = vec3(0);
 
 
-    for (int i = 0; i < fr.lightCount; i++)
+    for (int i = 0; i < fr.plightCount; i++)
     {
         vec3 norm = normalize(FragNorm);
-        vec3 lightDir = normalize(fr.lights[i].position - FragPos);
-        vec3 diffuse = max(dot(lightDir, norm), 0.0) * fr.lights[i].color;
+        vec3 lightDir = normalize(fr.plights[i].position - FragPos);
+        vec3 diffuse = max(dot(lightDir, norm), 0.0) * fr.plights[i].color;
         // The reflect excpect the vector to be from the lights source to the fragment so we have to recverse the lightdir
         float spec = pow(max(dot(reflect(-lightDir, norm), normalize(fr.cameraPos - FragPos)), 0.0), 32);
 
-        lighting_result += diffuse + spec * fr.lights[i].color * 0.5;
+        lighting_result += diffuse + spec * fr.plights[i].color * 0.5;
 
     }
 

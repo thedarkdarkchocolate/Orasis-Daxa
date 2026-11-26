@@ -18,7 +18,7 @@ struct Camera {
 
     public:
 
-
+    // Sets the viewMatrix based on the inputs
     void setViewDirection(glm::vec3 position, glm::vec3 direction, glm::vec3 up = glm::vec3{0.f, 1.f, 0.f})
     {
         const glm::vec3 w{glm::normalize(direction)};
@@ -45,7 +45,8 @@ struct Camera {
         setViewDirection(position, target - position, up);
     }
 
-    void setViewYXZ(glm::vec3 position, glm::vec3 rotation)
+    // Sets the viewMatrix based on position and rotation
+    void setViewMatrixYXZ(glm::vec3 position, glm::vec3 rotation)
     {
         const float c3 = glm::cos(rotation.z);
         const float s3 = glm::sin(rotation.z);

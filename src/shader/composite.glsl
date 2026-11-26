@@ -39,7 +39,6 @@ layout(location = 0) out daxa_f32vec4 outColor;
 
 void main()
 {
-    const float gamma = 2.2;
     vec3 hdrColor = texture(daxa_sampler2D(push.hdr_view_ID, push.sampler_ID), FragUV).rgb;      
     vec3 bloomColor = texture(daxa_sampler2D(push.bloom_view_ID, push.sampler_ID), FragUV).rgb;
 
@@ -47,7 +46,7 @@ void main()
     // tone mapping
     vec3 result = vec3(1.0) - exp(-hdrColor * push.exposure);
     // also gamma correct while we're at it       
-    result = pow(result, vec3(1.0 / gamma));
+    result = pow(result, vec3(1.0 / push.gamma));
     outColor = vec4(result, 1.0);
 
 

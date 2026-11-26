@@ -163,7 +163,7 @@ struct Model {
         size_t size = sizeof(stbi_uc) * width * height * file_channels;
 
         m_image_staging_buffer_ID = m_GPU.create_buffer({
-            .size = sizeof(stbi_uc) * width * height * file_channels,
+            .size = size,
             .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE
         });
 
